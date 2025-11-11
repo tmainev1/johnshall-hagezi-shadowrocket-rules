@@ -1,0 +1,1 @@
+# After entering domains you don't want to block (such as banks, payment services, commonly used CDNs, etc.), the script will automatically exclude them.
