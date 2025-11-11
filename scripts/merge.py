@@ -2,10 +2,11 @@
 # coding: utf-8
 """
 merge.py
-Merge Johnshall's Shadowrocket configuration with HaGeZi's domains/multi.txt
-Retain non-domain settings such as [General], [URL Rewrite], [MITM] from Johnshall's configuration
-Write merged/deduplicated domains into the [Rule] section as DOMAIN-SUFFIX,domain,REJECT
+合并 Johnshall 的 Shadowrocket 配置与 HaGezi 的 domains/multi.txt
+保留非域名设置；[Rule] 中合并域名规则；末尾追加固定 IP-CIDR 与 FINAL
+移除来源注释，仅保留脚本自带注释，并在注释最后写入 build time (UTC)
 
+依赖: idna
 """
 
 import re
@@ -13,22 +14,23 @@ import sys
 import os
 import urllib.request
 import idna
+from datetime import datetime, timezone
 
-# Source Address
+# === 源地址 ===
 SRC_SHADOWROCKET = "https://johnshall.github.io/Shadowrocket-ADBlock-Rules-Forever/sr_proxy_banad.conf"
 SRC_HAGEZI = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/multi.txt"
 
-# Optional whitelist/custom blacklist
+# === 可选白名单/自定义黑名单 ===
 ALLOW_PATH = "allow.txt"
 EXTRA_BLOCK_PATH = "extra_block.txt"
 
+# === 输出路径 ===
 OUT_DIR = "output"
 OUT_DOMAINS = os.path.join(OUT_DIR, "domains.txt")
 OUT_SR = os.path.join(OUT_DIR, "shadowrocket.conf")
-
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# Default template used when johnshall does not have [General] (you can modify it as needed)
+# 当 johnshall 没有 [General] 时使用的默认模板（可自改）
 DEFAULT_GENERAL = [
     "[General]",
     "ipv6 = false",
@@ -39,9 +41,21 @@ DEFAULT_GENERAL = [
     ""
 ]
 
-# Regular Expression
+# 固定要追加到 [Rule] 末尾的规则
+TAIL_RULES = [
+    "IP-CIDR,192.168.0.0/16,DIRECT",
+    "IP-CIDR,10.0.0.0/8,DIRECT",
+    "IP-CIDR,172.16.0.0/12,DIRECT",
+    "IP-CIDR,127.0.0.0/8,DIRECT",
+    "IP-CIDR,fe80::/10,DIRECT",
+    "IP-CIDR,fc00::/7,DIRECT",
+    "IP-CIDR,::1/128,DIRECT",
+    "",
+    "FINAL,proxy"
+]
+
+# === 正则 ===
 SECTION_HEADER_RE = re.compile(r'^\s*\[(.+?)\]\s*$')
-DOMAIN_LINE_RE = re.compile(r'^[a-z0-9\-\.\*]+$', re.IGNORECASE)
 IP_V4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 def fetch(url: str) -> str:
@@ -50,28 +64,17 @@ def fetch(url: str) -> str:
 
 def normalize_domain(d: str) -> str:
     d = d.strip().lower()
-    # remove protocol paths or extra parts
-    d = d.split("/")[0]
+    d = d.split("/")[0]  # 去除路径
     d = d.lstrip(".")
-    if not d:
+    if not d or " " in d or IP_V4_RE.match(d):
         return ""
-    # filter out ips and things with spaces
-    if " " in d or IP_V4_RE.match(d):
-        return ""
-    # strip common prefixes
     d = d.lstrip("*").lstrip(".")
-    # if only one label (no dot) skip
     if d.count('.') == 0:
         return ""
-    # reject if contains slashes or illegal chars
     if not re.match(r'^[a-z0-9\-\.\u0080-\uffff]+$', d, re.IGNORECASE):
         return ""
-    # punycode normalize
     try:
-        # idna encode -> ascii
-        d_ascii = idna.encode(d, uts46=True).decode('ascii')
-        # then normalize back to lower-ascii form for storage
-        return d_ascii.lower()
+        return idna.encode(d, uts46=True).decode('ascii').lower()
     except Exception:
         return d.lower()
 
@@ -85,38 +88,42 @@ def load_list(path: str) -> set:
                     s.add(dom)
     return s
 
+def strip_comments(lines):
+    """移除来源中的注释行，只保留非注释内容"""
+    out = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("#") or s.startswith("//"):
+            continue
+        out.append(line)
+    return out
+
 def parse_johnshall_conf(text: str):
     """
-    Parses conf files in johnshall style, returning sections: dict[section_name] -> list(lines)
-    Preserves original lines (including comments), but splits [Rule] sections into:
-      - rule_non_domain_lines : **Non**-domain entries from the original [Rule] (e.g., IP-CIDR, GEOIP, FINAL, etc.)
-      - rule_domain_set: Extract and normalize domain sets from [Rule] (DOMAIN, DOMAIN-SUFFIX, HOST)
-    Other sections ([General], [URL Rewrite], [MITM]) returned as original lists
+    解析为 sections: dict[section_name] -> list(lines)
+    并从 [Rule] 提取：
+      - rule_non_domain_lines: 非域名条目（保留，稍后再统一去注释）
+      - rule_domain_set: 域名集合（DOMAIN/DOMAIN-SUFFIX/HOST/HOST-SUFFIX）
     """
     sections = {}
     cur = None
-    lines = text.splitlines()
-    for raw in lines:
+    for raw in text.splitlines():
         m = SECTION_HEADER_RE.match(raw)
         if m:
             cur = m.group(1).strip()
             sections.setdefault(cur, [])
             continue
         if cur is None:
-            # headerless leading lines (rare) -> put into top
             sections.setdefault('__top__', []).append(raw)
         else:
             sections[cur].append(raw)
-    # Split domain names / non-domain names from [Rule]
+
     rule_non_domain_lines = []
     rule_domain_set = set()
     if 'Rule' in sections:
         for line in sections['Rule']:
             s = line.strip()
-            if not s or s.startswith("#") or s.startswith("//"):
-                # preserve comments/blank
-                rule_non_domain_lines.append(line)
-                continue
+            # 注释在这里先不丢，后续统一 strip
             parts = [p.strip() for p in s.split(',')]
             if len(parts) >= 2:
                 typ = parts[0].upper()
@@ -126,8 +133,8 @@ def parse_johnshall_conf(text: str):
                     if nd:
                         rule_domain_set.add(nd)
                         continue
-            # fallback: not a domain rule we care about — keep as non-domain
             rule_non_domain_lines.append(line)
+
     return sections, rule_domain_set, rule_non_domain_lines
 
 def parse_hagezi_domains(text: str) -> set:
@@ -143,50 +150,59 @@ def parse_hagezi_domains(text: str) -> set:
 
 def build_output_conf(j_sections, jr_non_domain_lines, merged_domains_sorted):
     """
-    Generate the final shadowrocket.conf text:
-      - Prioritize writing [General] (from johnshall; use DEFAULT_GENERAL if absent)
-      - Then write [Rule]:
-          * First write johnshall's rule_non_domain_lines (as-is)
-          * Followed by the merged domain rules (DOMAIN-SUFFIX,domain,REJECT)
-      - Finally append the remaining sections from johnshall (e.g., [URL Rewrite], [MITM]) unchanged (preserving original order except for consumed [Rule] sections)
+    生成最终 shadowrocket.conf：
+      - 去除来源注释（所有 section）
+      - [General]：johnshall 或默认模板
+      - [Rule]：先保留 johnshall 的非域名规则（去注释），再写域名规则，最后追加 TAIL_RULES
+      - 其他段（如 [URL Rewrite], [MITM]）按原顺序写入（去注释）
     """
     out_lines = []
 
-    # header/top if exists
+    # 顶部散行（极少见）去注释
     if '__top__' in j_sections and j_sections['__top__']:
-        out_lines.extend(j_sections['__top__'])
-        out_lines.append("")
+        out_lines.extend(strip_comments(j_sections['__top__']))
+        if out_lines and out_lines[-1] != "":
+            out_lines.append("")
 
     # General
     if 'General' in j_sections and j_sections['General']:
         out_lines.append("[General]")
-        out_lines.extend(j_sections['General'])
+        out_lines.extend(strip_comments(j_sections['General']))
         out_lines.append("")
     else:
-        # fallback default general
         out_lines.extend(DEFAULT_GENERAL)
 
     # Rule
     out_lines.append("[Rule]")
-    # first preserve johnshall's non-domain rule lines (if any)
-    if jr_non_domain_lines:
-        out_lines.extend(jr_non_domain_lines)
-    else:
-        # if none, keep a comment explaining
-        out_lines.append("# non-domain rules from original [Rule] (none preserved)")
-    out_lines.append("")  # blank line for readability
+    # 先写入去注释后的非域名规则
+    jr_clean = strip_comments(jr_non_domain_lines)
+    out_lines.extend(jr_clean)
+    if not (len(out_lines) > 0 and out_lines[-1] == ""):
+        out_lines.append("")
 
-    # then produce domain rules
+    # 再写域名规则
     for d in merged_domains_sorted:
         out_lines.append(f"DOMAIN-SUFFIX,{d},REJECT")
     out_lines.append("")
 
-    # append other johnshall sections except General and Rule (respect original order)
+    # 确保末尾追加固定规则（去重）
+    existing = set(line.strip() for line in out_lines if line.strip())
+    for line in TAIL_RULES:
+        if not line:  # 空行
+            if out_lines and out_lines[-1] != "":
+                out_lines.append("")
+            continue
+        if line.strip() not in existing:
+            out_lines.append(line)
+            existing.add(line.strip())
+    out_lines.append("")
+
+    # 追加其他段（去注释）
     for sec_name, sec_lines in j_sections.items():
         if sec_name in ('General', 'Rule', '__top__'):
             continue
         out_lines.append(f"[{sec_name}]")
-        out_lines.extend(sec_lines)
+        out_lines.extend(strip_comments(sec_lines))
         out_lines.append("")
 
     return "\n".join(out_lines)
@@ -215,23 +231,30 @@ def main():
 
     print(f"counts: johnshall domain rules={len(j_rule_domains)}, hagezi={len(h_domains)}, extra={len(extra)}, allow={len(allow)}")
 
-    # Merge: domain names in johnshall + hagezi + extra, then remove allow
     merged = (j_rule_domains | h_domains | extra) - allow
-
-    # Sorting (by domain name length, lexicographical order)
     merged_sorted = sorted(merged, key=lambda x: (len(x), x))
 
-    # Output domains.txt
+    # 输出 domains.txt
     with open(OUT_DOMAINS, "w", encoding="utf-8") as f:
         for d in merged_sorted:
             f.write(d + "\n")
 
-    # Generate a complete shadowrocket.conf file
+    # 生成完整 shadowrocket.conf（无来源注释）
     out_conf_text = build_output_conf(j_sections, j_rule_non_domain, merged_sorted)
+
+    # 头部脚本注释（唯一保留的注释），在最后追加 build time
+    build_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+    header = []
+    header.append("# Auto-generated by scripts/merge.py")
+    header.append(f"# Sources:")
+    header.append(f"# - {SRC_SHADOWROCKET}")
+    header.append(f"# - {SRC_HAGEZI}")
+    header.append("# allow.txt was applied to subtract domains; extra_block.txt was added.")
+    header.append(f"# build time (UTC): {build_time}")
+    header.append("")  # 空行分隔
+
     with open(OUT_SR, "w", encoding="utf-8") as f:
-        f.write("# Auto-generated by scripts/merge.py\n")
-        f.write(f"# Sources:\n# - {SRC_SHADOWROCKET}\n# - {SRC_HAGEZI}\n")
-        f.write("# allow.txt was applied to subtract domains; extra_block.txt was added.\n\n")
+        f.write("\n".join(header))
         f.write(out_conf_text)
 
     print(f"Done. total domains={len(merged_sorted)} -> {OUT_DOMAINS}, {OUT_SR}")
