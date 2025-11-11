@@ -50,8 +50,8 @@ TAIL_RULES = [
     "IP-CIDR,fe80::/10,DIRECT",
     "IP-CIDR,fc00::/7,DIRECT",
     "IP-CIDR,::1/128,DIRECT",
-    "",
-    "FINAL,proxy"
+    "GEOIP,CN,DIRECT",
+    "FINAL,PROXY"
 ]
 
 # === 正则 ===
