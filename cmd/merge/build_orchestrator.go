@@ -45,6 +45,7 @@ type BuildOrchestrator struct {
 	metrics       *BuildMetrics
 	httpClient    *HTTPClient
 	domainProc    *DomainProcessor
+	domainReader  *DomainListReader
 	dnsValidator  *BatchDNSValidator
 	configParser  *ConfigurationParser
 	configBuilder *ConfigurationBuilder
@@ -80,6 +81,7 @@ func NewBuildOrchestrator(config *BuildConfig) *BuildOrchestrator {
 		metrics:       &BuildMetrics{StartTime: time.Now(), Errors: []string{}},
 		httpClient:    NewHTTPClient(),
 		domainProc:    NewDomainProcessor(),
+		domainReader:  NewDomainListReader(),
 		dnsValidator:  NewBatchDNSValidator("119.29.29.53:53", config.DNSQPSLimit, config.Workers),
 		configParser:  NewConfigurationParser(),
 		configBuilder: NewConfigurationBuilder(),
@@ -161,7 +163,7 @@ func (bo *BuildOrchestrator) fetchSources(ctx context.Context) error {
 			bo.logger.Printf("Fetching %s from %s", t.name, t.url)
 			data, err := bo.httpClient.GetWithRetry(t.url)
 			if err != nil {
-				bo.recordError("failed to fetch %s: %w", t.name, err)
+				bo.recordError(fmt.Sprintf("failed to fetch %s: %v", t.name, err), err)
 				return
 			}
 			
@@ -190,7 +192,7 @@ func (bo *BuildOrchestrator) parseConfigurations(ctx context.Context) error {
 	}
 	
 	// Parse Hagezi domains
-	hageziSet, err := bo.domainProc.ReadFromString(sources["hagezi"], "hagezi")
+	hageziSet, err := bo.domainReader.ReadFromString(sources["hagezi"], "hagezi")
 	if err != nil {
 		return fmt.Errorf("failed to parse hagezi domains: %w", err)
 	}
@@ -225,12 +227,12 @@ func (bo *BuildOrchestrator) parseConfigurations(ctx context.Context) error {
 
 func (bo *BuildOrchestrator) processDomains(ctx context.Context) error {
 	// Load allow/extra lists
-	allowSet, err := bo.domainProc.ReadFromFile(bo.config.AllowFile)
+	allowSet, err := bo.domainReader.ReadFromFile(bo.config.AllowFile)
 	if err != nil {
 		return fmt.Errorf("failed to read allow list: %w", err)
 	}
 	
-	extraSet, err := bo.domainProc.ReadFromFile(bo.config.ExtraFile)
+	extraSet, err := bo.domainReader.ReadFromFile(bo.config.ExtraFile)
 	if err != nil {
 		return fmt.Errorf("failed to read extra list: %w", err)
 	}

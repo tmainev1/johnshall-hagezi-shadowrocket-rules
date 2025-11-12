@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // ConfigurationParser handles parsing of Shadowrocket configuration files

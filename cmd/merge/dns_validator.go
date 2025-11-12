@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,13 @@ type DNSValidator struct {
 type DNSCache struct {
 	mu    sync.RWMutex
 	cache map[string]bool
+}
+
+// NewDNSCache creates a new DNS cache
+func NewDNSCache() *DNSCache {
+	return &DNSCache{
+		cache: make(map[string]bool),
+	}
 }
 
 // DNSStats tracks DNS validation statistics
