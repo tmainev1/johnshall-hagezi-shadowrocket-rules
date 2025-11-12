@@ -3,7 +3,7 @@ name: build-merged-list
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 5 * * *"   # 每天 05:00 UTC
+    - cron: "0 5 * * *"
 
 permissions:
   contents: write
@@ -19,10 +19,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
+          cache: true   # 需要 go.sum 存在才会缓存成功
+
+      - name: Go mod tidy (generate go.sum)
+        run: |
+          go mod tidy
+          test -f go.sum && echo "go.sum present"
 
       - name: Build & Run
         run: |
-          go mod download
           go run ./cmd/merge
 
       - name: Commit changes (outputs + cache)
@@ -37,10 +42,9 @@ jobs:
             echo "No changes."
           fi
 
-      - name: Make TS
+      - name: Make TS (yyyymmddhhmm)
         id: ts
-        run: |
-          echo "ts=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+        run: echo "ts=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
