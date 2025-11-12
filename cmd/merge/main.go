@@ -38,27 +38,27 @@ const (
 	cacheMetadata = "cache/metadata.json"
 	dnsServerAddr = "119.29.29.29:53"
 
-	qpsLimit      = 50               // Increased from 20 to 50 QPS
-	resolveTO     = 2 * time.Second  // Per query timeout
+	qpsLimit      = 50              // Increased from 20 to 50 QPS
+	resolveTO     = 2 * time.Second // Per query timeout
 	fullMondayUTC = time.Monday
-	
+
 	// Performance tuning
-	workerCount   = 200              // Increased from 100 to 200 workers
-	batchSize     = 1000             // Batch processing size
-	maxRetries    = 3                // Maximum retries for failed requests
+	workerCount = 200  // Increased from 100 to 200 workers
+	batchSize   = 1000 // Batch processing size
+	maxRetries  = 3    // Maximum retries for failed requests
 )
 
 var (
 	sectionHeaderRe = regexp.MustCompile(`^\s*\[(.+?)\]\s*$`)
 	ipv4Re          = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}$`)
-	
+
 	domainLikeTypes = map[string]bool{
 		"DOMAIN":        true,
 		"DOMAIN-SUFFIX": true,
 		"HOST":          true,
 		"HOST-SUFFIX":   true,
 	}
-	
+
 	defaultGeneral = []string{
 		"[General]",
 		"ipv6 = false",
@@ -68,7 +68,7 @@ var (
 		"dns-server = https://dns.alidns.com/dns-query, https://doh.pub/dns-query",
 		"",
 	}
-	
+
 	tailRules = []string{
 		"IP-CIDR,192.168.0.0/16,DIRECT",
 		"IP-CIDR,10.0.0.0/8,DIRECT",
@@ -84,14 +84,14 @@ var (
 
 // Performance metrics
 type Metrics struct {
-	StartTime        time.Time              `json:"start_time"`
-	EndTime          time.Time              `json:"end_time"`
-	DomainsProcessed int                    `json:"domains_processed"`
-	DNSQueries       int                    `json:"dns_queries"`
-	CacheHits        int                    `json:"cache_hits"`
-	NetworkRequests  int                    `json:"network_requests"`
-	Errors           int                    `json:"errors"`
-	Duration         time.Duration          `json:"duration"`
+	StartTime        time.Time     `json:"start_time"`
+	EndTime          time.Time     `json:"end_time"`
+	DomainsProcessed int           `json:"domains_processed"`
+	DNSQueries       int           `json:"dns_queries"`
+	CacheHits        int           `json:"cache_hits"`
+	NetworkRequests  int           `json:"network_requests"`
+	Errors           int           `json:"errors"`
+	Duration         time.Duration `json:"duration"`
 }
 
 func (m *Metrics) Save() error {
@@ -117,7 +117,7 @@ func NewHTTPClient() *HTTPClient {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	
+
 	return &HTTPClient{
 		client:  &http.Client{Transport: tr, Timeout: 90 * time.Second},
 		retries: maxRetries,
@@ -131,36 +131,36 @@ func (h *HTTPClient) GetWithRetry(url string) (string, error) {
 			backoff := time.Duration(attempt) * time.Second
 			time.Sleep(backoff)
 		}
-		
+
 		resp, err := h.client.Get(url)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		
+
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("rate limited")
 			continue
 		}
-		
+
 		if resp.StatusCode/100 != 2 {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
 		}
-		
+
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		
+
 		s := string(bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}))
 		return s, nil
 	}
-	
+
 	return "", fmt.Errorf("failed after %d attempts: %w", h.retries, lastErr)
 }
 
@@ -191,19 +191,19 @@ func normalizeDomain(d string) (string, bool) {
 	if d == "" {
 		return "", false
 	}
-	
+
 	d = strings.Split(d, "/")[0]
 	d = strings.TrimLeft(d, ".")
-	
+
 	if strings.Contains(d, " ") || ipv4Re.MatchString(d) {
 		return "", false
 	}
-	
+
 	d = strings.TrimLeft(d, "*.")
 	if strings.Count(d, ".") == 0 {
 		return "", false
 	}
-	
+
 	puny, err := idna.ToASCII(d)
 	if err != nil {
 		return d, true
@@ -221,10 +221,10 @@ func readListFile(path string) (map[string]struct{}, error) {
 		return nil, err
 	}
 	defer f.Close()
-	
+
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 1MB max line size
-	
+
 	for scanner.Scan() {
 		if d, ok := normalizeDomain(scanner.Text()); ok {
 			m[d] = struct{}{}
@@ -239,10 +239,10 @@ func writeLines(path string, lines []string) error {
 		return err
 	}
 	defer f.Close()
-	
+
 	w := bufio.NewWriterSize(f, 64*1024) // 64KB buffer
 	defer w.Flush()
-	
+
 	for _, ln := range lines {
 		if _, err := w.WriteString(ln + "\n"); err != nil {
 			return err
@@ -269,11 +269,11 @@ func (bp *BatchProcessor) Process(items []string, processFunc func([]string) err
 	if len(items) == 0 {
 		return nil
 	}
-	
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, bp.workerCount)
 	itemCh := make(chan []string, bp.workerCount)
-	
+
 	// Start workers
 	for i := 0; i < bp.workerCount; i++ {
 		wg.Add(1)
@@ -287,7 +287,7 @@ func (bp *BatchProcessor) Process(items []string, processFunc func([]string) err
 			}
 		}()
 	}
-	
+
 	// Send batches
 	go func() {
 		defer close(itemCh)
@@ -299,29 +299,29 @@ func (bp *BatchProcessor) Process(items []string, processFunc func([]string) err
 			itemCh <- items[i:end]
 		}
 	}()
-	
+
 	wg.Wait()
 	close(errCh)
-	
+
 	// Check for errors
 	for err := range errCh {
 		if err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
 // ---------- Enhanced DNS checker with connection pooling ----------
 
 type DNSChecker struct {
-	resolver   *net.Resolver
-	tokens     chan struct{}
-	cache      map[string]bool
-	cacheMu    sync.RWMutex
-	hits       atomic.Int64
-	queries    atomic.Int64
+	resolver *net.Resolver
+	tokens   chan struct{}
+	cache    map[string]bool
+	cacheMu  sync.RWMutex
+	hits     atomic.Int64
+	queries  atomic.Int64
 }
 
 func NewDNSChecker() *DNSChecker {
@@ -329,14 +329,14 @@ func NewDNSChecker() *DNSChecker {
 		Timeout:   resolveTO,
 		KeepAlive: 30 * time.Second,
 	}
-	
+
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "udp", dnsServerAddr)
 		},
 	}
-	
+
 	tokens := make(chan struct{}, qpsLimit)
 	go func() {
 		tick := time.NewTicker(time.Second / time.Duration(qpsLimit))
@@ -348,7 +348,7 @@ func NewDNSChecker() *DNSChecker {
 			}
 		}
 	}()
-	
+
 	return &DNSChecker{
 		resolver: r,
 		tokens:   tokens,
@@ -364,24 +364,24 @@ func (dc *DNSChecker) IsValid(ctx context.Context, domain string) bool {
 		return cached
 	}
 	dc.cacheMu.RUnlock()
-	
+
 	dc.queries.Add(1)
-	
+
 	select {
 	case <-dc.tokens:
 	case <-ctx.Done():
 		return false
 	}
-	
+
 	ctxTO, cancel := context.WithTimeout(ctx, resolveTO)
 	defer cancel()
-	
+
 	result := dc.performLookup(ctxTO, domain)
-	
+
 	dc.cacheMu.Lock()
 	dc.cache[domain] = result
 	dc.cacheMu.Unlock()
-	
+
 	return result
 }
 
@@ -391,21 +391,21 @@ func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
 		success bool
 		err     error
 	}
-	
+
 	results := make(chan lookupResult, 3)
-	
+
 	// A record lookup
 	go func() {
 		addrs, err := dc.resolver.LookupHost(ctx, domain)
 		results <- lookupResult{success: len(addrs) > 0, err: err}
 	}()
-	
+
 	// AAAA record lookup
 	go func() {
 		ip6, err := dc.resolver.LookupIPAddr(ctx, domain)
 		results <- lookupResult{success: len(ip6) > 0, err: err}
 	}()
-	
+
 	// CNAME lookup
 	go func() {
 		cname, err := dc.resolver.LookupCNAME(ctx, domain)
@@ -413,20 +413,20 @@ func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
 			results <- lookupResult{success: false, err: err}
 			return
 		}
-		
+
 		cname = strings.TrimSuffix(cname, ".")
 		if cname == domain {
 			results <- lookupResult{success: false, err: nil}
 			return
 		}
-		
+
 		ctx2, cancel2 := context.WithTimeout(ctx, resolveTO)
 		defer cancel2()
-		
+
 		addrs, err := dc.resolver.LookupHost(ctx2, cname)
 		results <- lookupResult{success: len(addrs) > 0, err: err}
 	}()
-	
+
 	// Wait for first successful result
 	timeout := time.After(resolveTO)
 	for i := 0; i < 3; i++ {
@@ -441,7 +441,7 @@ func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
 			return false
 		}
 	}
-	
+
 	return false
 }
 
@@ -454,7 +454,7 @@ func (dc *DNSChecker) GetStats() (hits, queries int64) {
 func filterByDNSOptimized(domains map[string]struct{}, fullRefresh bool) (map[string]struct{}, *Metrics, error) {
 	all := keys(domains)
 	sort.Strings(all)
-	
+
 	metrics := &Metrics{
 		StartTime:        time.Now(),
 		DomainsProcessed: len(all),
@@ -464,7 +464,7 @@ func filterByDNSOptimized(domains map[string]struct{}, fullRefresh bool) (map[st
 		metrics.Duration = metrics.EndTime.Sub(metrics.StartTime)
 		metrics.Save()
 	}()
-	
+
 	// Load cached results
 	cached, _ := readListFile(cacheOK)
 	if !fullRefresh {
@@ -475,7 +475,7 @@ func filterByDNSOptimized(domains map[string]struct{}, fullRefresh bool) (map[st
 			}
 		}
 	}
-	
+
 	// Determine domains needing validation
 	needValidation := make([]string, 0, len(all))
 	if !fullRefresh {
@@ -487,64 +487,64 @@ func filterByDNSOptimized(domains map[string]struct{}, fullRefresh bool) (map[st
 	} else {
 		needValidation = all
 	}
-	
-	metrics.CacheHits = int64(len(all) - len(needValidation))
-	
+
+	metrics.CacheHits = len(all) - len(needValidation)
+
 	log.Printf("DNS validation: total=%d cached=%d to_validate=%d",
 		len(all), len(cached), len(needValidation))
-	
+
 	if len(needValidation) == 0 && !fullRefresh {
 		return cached, metrics, nil
 	}
-	
+
 	// Initialize DNS checker
 	dc := NewDNSChecker()
 	ctx := context.Background()
-	
+
 	// Process domains in batches
 	validated := make(map[string]struct{}, len(needValidation))
 	var mu sync.Mutex
-	
+
 	processor := NewBatchProcessor()
 	err := processor.Process(needValidation, func(batch []string) error {
 		batchResults := make([]string, 0, len(batch))
-		
+
 		for _, domain := range batch {
 			if dc.IsValid(ctx, domain) {
 				batchResults = append(batchResults, domain)
 			}
 		}
-		
+
 		mu.Lock()
 		for _, domain := range batchResults {
 			validated[domain] = struct{}{}
 		}
 		mu.Unlock()
-		
+
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, metrics, fmt.Errorf("batch processing failed: %w", err)
 	}
-	
+
 	// Merge results
 	final := validated
 	if !fullRefresh {
 		final = unionSets(cached, validated)
 	}
-	
+
 	// Save cache
 	if err := writeLines(cacheOK, sortedKeys(final)); err != nil {
 		return nil, metrics, fmt.Errorf("failed to write cache: %w", err)
 	}
-	
+
 	hits, queries := dc.GetStats()
-	metrics.DNSQueries = queries
-	
+	metrics.DNSQueries = int(queries)
+
 	log.Printf("DNS validation completed: validated=%d cache_hits=%d queries=%d",
 		len(validated), hits, queries)
-	
+
 	return final, metrics, nil
 }
 
@@ -555,10 +555,10 @@ type sections map[string][]string
 func parseSections(text string) sections {
 	ss := make(sections)
 	var cur string
-	
+
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 1MB max line size
-	
+
 	for scanner.Scan() {
 		ln := scanner.Text()
 		if m := sectionHeaderRe.FindStringSubmatch(ln); m != nil {
@@ -580,11 +580,11 @@ func parseSections(text string) sections {
 func extractRuleDomains(ruleLines []string) (nonDomainLines []string, domains map[string]struct{}) {
 	nonDomainLines = []string{}
 	domains = make(map[string]struct{})
-	
+
 	for _, raw := range ruleLines {
 		trim := strings.TrimSpace(raw)
 		parts := strings.Split(trim, ",")
-		
+
 		if len(parts) >= 2 {
 			typ := strings.ToUpper(strings.TrimSpace(parts[0]))
 			if domainLikeTypes[typ] {
@@ -601,10 +601,10 @@ func extractRuleDomains(ruleLines []string) (nonDomainLines []string, domains ma
 
 func parseHagezi(text string) map[string]struct{} {
 	m := make(map[string]struct{})
-	
+
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 1MB max line size
-	
+
 	for scanner.Scan() {
 		ln := strings.TrimSpace(scanner.Text())
 		if ln == "" || strings.HasPrefix(ln, "#") || strings.HasPrefix(ln, "!") {
@@ -621,7 +621,7 @@ func parseHagezi(text string) map[string]struct{} {
 
 func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []string) string {
 	var out []string
-	
+
 	// Process top-level comments
 	if top, ok := js["__top__"]; ok && len(top) > 0 {
 		out = append(out, stripComments(top)...)
@@ -629,7 +629,7 @@ func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []
 			out = append(out, "")
 		}
 	}
-	
+
 	// General section
 	if g, ok := js["General"]; ok && len(g) > 0 {
 		out = append(out, "[General]")
@@ -638,20 +638,20 @@ func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []
 	} else {
 		out = append(out, defaultGeneral...)
 	}
-	
+
 	// Rule section
 	out = append(out, "[Rule]")
 	out = append(out, stripComments(ruleNonDomain)...)
 	if len(out) == 0 || out[len(out)-1] != "" {
 		out = append(out, "")
 	}
-	
+
 	// Domain rules
 	for _, d := range mergedDomains {
 		out = append(out, fmt.Sprintf("DOMAIN-SUFFIX,%s,REJECT", d))
 	}
 	out = append(out, "")
-	
+
 	// Tail rules with deduplication
 	seen := make(map[string]struct{})
 	for _, ln := range out {
@@ -660,7 +660,7 @@ func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []
 			seen[t] = struct{}{}
 		}
 	}
-	
+
 	for _, ln := range tailRules {
 		t := strings.TrimSpace(ln)
 		if t == "" {
@@ -675,7 +675,7 @@ func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []
 		}
 	}
 	out = append(out, "")
-	
+
 	// Other sections
 	for name, lines := range js {
 		if name == "__top__" || name == "General" || name == "Rule" {
@@ -685,7 +685,7 @@ func buildShadowrocketConf(js sections, ruleNonDomain []string, mergedDomains []
 		out = append(out, stripComments(lines)...)
 		out = append(out, "")
 	}
-	
+
 	return strings.Join(out, "\n")
 }
 
@@ -725,44 +725,44 @@ func unionSets(a, b map[string]struct{}) map[string]struct{} {
 
 func main() {
 	startTime := time.Now()
-	
+
 	// Initialize logging
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("Starting optimized build process (GOMAXPROCS=%d)", runtime.GOMAXPROCS(0))
-	
+
 	mustMkDirs()
-	
+
 	// Initialize HTTP client with retry logic
 	httpClient := NewHTTPClient()
-	
+
 	log.Println("Fetching sources...")
-	
+
 	// Fetch sources concurrently
 	type fetchResult struct {
 		name string
 		data string
 		err  error
 	}
-	
+
 	fetchCh := make(chan fetchResult, 2)
-	
+
 	go func() {
 		data, err := httpClient.GetWithRetry(srcJohnshall)
 		fetchCh <- fetchResult{name: "johnshall", data: data, err: err}
 	}()
-	
+
 	go func() {
 		data, err := httpClient.GetWithRetry(srcHagezi)
 		fetchCh <- fetchResult{name: "hagezi", data: data, err: err}
 	}()
-	
+
 	var johnText, hgText string
 	for i := 0; i < 2; i++ {
 		result := <-fetchCh
 		if result.err != nil {
 			log.Fatalf("Failed to fetch %s: %v", result.name, result.err)
 		}
-		
+
 		switch result.name {
 		case "johnshall":
 			johnText = result.data
@@ -770,18 +770,18 @@ func main() {
 			hgText = result.data
 		}
 	}
-	
+
 	log.Println("Parsing configurations...")
-	
+
 	// Parse configurations
 	js := parseSections(johnText)
 	ruleNonDomain, ruleDomains := extractRuleDomains(js["Rule"])
 	hgDomains := parseHagezi(hgText)
-	
+
 	// Load allow/extra lists
 	allow, _ := readListFile(allowPath)
 	extra, _ := readListFile(extraPath)
-	
+
 	// Merge domains
 	merged := make(map[string]struct{})
 	for k := range ruleDomains {
@@ -796,29 +796,29 @@ func main() {
 	for k := range allow {
 		delete(merged, k)
 	}
-	
+
 	// Determine refresh strategy
 	fullRefresh := time.Now().UTC().Weekday() == fullMondayUTC
-	
+
 	log.Printf("Merged domains: total=%d (johnshall=%d, hagezi=%d, extra=%d, allow=%d) full_refresh=%v",
 		len(merged), len(ruleDomains), len(hgDomains), len(extra), len(allow), fullRefresh)
-	
+
 	// DNS validation with performance monitoring
 	log.Println("Starting DNS validation...")
 	okSet, metrics, err := filterByDNSOptimized(merged, fullRefresh)
 	if err != nil {
 		log.Fatalf("DNS validation failed: %v", err)
 	}
-	
+
 	// Sort results
 	okList := sortedKeys(okSet)
-	
+
 	// Write outputs
 	log.Println("Writing output files...")
 	if err := writeLines(outDomains, okList); err != nil {
 		log.Fatalf("Failed to write domains.txt: %v", err)
 	}
-	
+
 	// Generate configuration
 	buildTime := time.Now().UTC().Format("2006-01-02 15:04:05 MST")
 	header := []string{
@@ -832,12 +832,12 @@ func main() {
 		"# Build time (UTC): " + buildTime,
 		"",
 	}
-	
+
 	body := buildShadowrocketConf(js, ruleNonDomain, okList)
 	if err := writeLines(outSR, append(header, body)); err != nil {
 		log.Fatalf("Failed to write shadowrocket.conf: %v", err)
 	}
-	
+
 	// Performance summary
 	totalTime := time.Since(startTime)
 	log.Printf("Build completed successfully in %v", totalTime)

@@ -81,7 +81,7 @@ func NewBuildOrchestrator(config *BuildConfig) *BuildOrchestrator {
 		metrics:       &BuildMetrics{StartTime: time.Now(), Errors: []string{}},
 		httpClient:    NewHTTPClient(),
 		domainProc:    NewDomainProcessor(),
-		domainReader:  NewDomainListReader(),
+		domainReader:  NewDomainListReader(NewDomainProcessor()),
 		dnsValidator:  NewBatchDNSValidator("119.29.29.53:53", config.DNSQPSLimit, config.Workers),
 		configParser:  NewConfigurationParser(),
 		configBuilder: NewConfigurationBuilder(),
