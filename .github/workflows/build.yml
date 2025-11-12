@@ -3,7 +3,7 @@ name: build-merged-list
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 3 * * *"  
+    - cron: "0 5 * * *"   # 每天 05:00 UTC
 
 permissions:
   contents: write
@@ -15,28 +15,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.x"
+          go-version: "1.22.x"
 
-      - name: Install deps
+      - name: Build & Run
         run: |
-          python -m pip install --upgrade pip
-          pip install idna
+          go mod download
+          go run ./cmd/merge
 
-      - name: Merge & generate
-        run: |
-          python scripts/merge.py
-
-      - name: Commit changes
+      - name: Commit changes (outputs + cache)
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add output/*.txt output/*.conf || true
-            git commit -m "chore: auto-build merged lists $(date -u +'%Y-%m-%d %H:%M:%S')"
+            git add output/*.txt output/*.conf cache/ok.txt || true
+            git commit -m "chore: auto-build $(date -u +'%Y-%m-%d %H:%M:%S')"
             git push
           else
             echo "No changes."
           fi
+
+      - name: Make TS
+        id: ts
+        run: |
+          echo "ts=$(date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.ts.outputs.ts }}
+          tag_name: ${{ steps.ts.outputs.ts }}
+          files: |
+            output/domains.txt
+            output/shadowrocket.conf
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
