@@ -1,0 +1,92 @@
+name: build-merged-list-optimized
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.22.x"
+  CACHE_VERSION: "v1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ env.CACHE_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.CACHE_VERSION }}-
+
+      - name: Cache DNS validation results
+        uses: actions/cache@v4
+        with:
+          path: cache/ok.txt
+          key: dns-cache-${{ env.CACHE_VERSION }}-${{ hashFiles('allow.txt', 'extra_block.txt') }}
+          restore-keys: |
+            dns-cache-${{ env.CACHE_VERSION }}-
+
+      - name: Go mod tidy
+        run: |
+          go mod tidy
+          test -f go.sum && echo "go.sum present"
+
+      - name: Build optimized binary
+        run: |
+          go build -ldflags="-s -w" -o merge-optimized ./cmd/merge
+
+      - name: Run with performance monitoring
+        run: |
+          echo "Build started at $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          time ./merge-optimized
+          echo "Build completed at $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs-${{ github.run_number }}
+          path: |
+            output/
+            cache/
+          retention-days: 7
+
+      - name: Commit changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add output/*.txt output/*.conf cache/ok.txt || true
+            git commit -m "chore: auto-build $(date -u +'%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "No changes."
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.ts.outputs.ts }}
+          tag_name: ${{ steps.ts.outputs.ts }}
+          files: |
+            output/domains.txt
+            output/shadowrocket.conf
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
