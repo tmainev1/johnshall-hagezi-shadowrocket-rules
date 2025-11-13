@@ -36,13 +36,6 @@ const (
 	cacheDir      = "cache"
 	cacheOK       = "cache/ok.txt"
 	cacheMetadata = "cache/metadata.json"
-	
-	// DNS servers with load balancing
-	dnsServers = []string{
-		"119.29.29.29:53",
-		"223.5.5.5:53",
-		"101.101.101.101:53",
-	}
 
 	qpsLimit      = 20              // DNS QPS limit per server
 	resolveTO     = 2 * time.Second // Per query timeout
@@ -52,6 +45,15 @@ const (
 	workerCount = 200  // Increased from 100 to 200 workers
 	batchSize   = 1000 // Batch processing size
 	maxRetries  = 3    // Maximum retries for failed requests
+)
+
+var (
+	// DNS servers with load balancing
+	dnsServers = []string{
+		"119.29.29.29:53",
+		"223.5.5.5:53",
+		"101.101.101.101:53",
+	}
 )
 
 var (
