@@ -38,7 +38,7 @@ const (
 	cacheMetadata = "cache/metadata.json"
 	dnsServerAddr = "119.29.29.29:53"
 
-	qpsLimit      = 50              // Increased from 20 to 50 QPS
+	qpsLimit      = 20              // DNS QPS limit
 	resolveTO     = 2 * time.Second // Per query timeout
 	fullMondayUTC = time.Monday
 
@@ -827,7 +827,7 @@ func main() {
 		"# - " + srcJohnshall,
 		"# - " + srcHagezi,
 		"# allow.txt was applied to subtract domains; extra_block.txt was added.",
-		"# DNS validated via 119.29.29.29 at 50 QPS with connection pooling and batch processing",
+		"# DNS validated via 119.29.29.29 at 20 QPS with connection pooling and batch processing",
 		"# Cache in cache/ok.txt; Monday UTC full refresh",
 		"# Build time (UTC): " + buildTime,
 		"",

@@ -67,6 +67,14 @@ jobs:
             cache/
           retention-days: 7
 
+      - name: Generate tag
+        id: tag
+        run: |
+          TIMESTAMP=$(date -u +'%Y%m%d-%H%M%S')
+          TAG="v${TIMESTAMP}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Generated tag: ${TAG}"
+
       - name: Commit changes
         run: |
           if [ -n "$(git status --porcelain)" ]; then
@@ -82,8 +90,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.ts.outputs.ts }}
-          tag_name: ${{ steps.ts.outputs.ts }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: |
             output/domains.txt
             output/shadowrocket.conf
