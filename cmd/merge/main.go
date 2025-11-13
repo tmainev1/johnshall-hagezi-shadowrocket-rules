@@ -36,9 +36,15 @@ const (
 	cacheDir      = "cache"
 	cacheOK       = "cache/ok.txt"
 	cacheMetadata = "cache/metadata.json"
-	dnsServerAddr = "119.29.29.29:53"
+	
+	// DNS servers with load balancing
+	dnsServers = []string{
+		"119.29.29.29:53",
+		"223.5.5.5:53",
+		"101.101.101.101:53",
+	}
 
-	qpsLimit      = 20              // DNS QPS limit
+	qpsLimit      = 20              // DNS QPS limit per server
 	resolveTO     = 2 * time.Second // Per query timeout
 	fullMondayUTC = time.Monday
 
@@ -313,11 +319,17 @@ func (bp *BatchProcessor) Process(items []string, processFunc func([]string) err
 	return nil
 }
 
-// ---------- Enhanced DNS checker with connection pooling ----------
+// ---------- Enhanced DNS checker with connection pooling and load balancing ----------
 
-type DNSChecker struct {
+type dnsServer struct {
+	addr     string
 	resolver *net.Resolver
 	tokens   chan struct{}
+}
+
+type DNSChecker struct {
+	servers  []*dnsServer
+	nextIdx  atomic.Uint64 // For round-robin load balancing
 	cache    map[string]bool
 	cacheMu  sync.RWMutex
 	hits     atomic.Int64
@@ -330,30 +342,48 @@ func NewDNSChecker() *DNSChecker {
 		KeepAlive: 30 * time.Second,
 	}
 
-	r := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "udp", dnsServerAddr)
-		},
-	}
-
-	tokens := make(chan struct{}, qpsLimit)
-	go func() {
-		tick := time.NewTicker(time.Second / time.Duration(qpsLimit))
-		defer tick.Stop()
-		for range tick.C {
-			select {
-			case tokens <- struct{}{}:
-			default:
-			}
+	servers := make([]*dnsServer, len(dnsServers))
+	for i, addr := range dnsServers {
+		// Capture addr in local variable to avoid closure issue
+		serverAddr := addr
+		// Create resolver for each DNS server
+		r := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "udp", serverAddr)
+			},
 		}
-	}()
+
+		// Create QPS limiter for each DNS server (20 QPS per server)
+		tokens := make(chan struct{}, qpsLimit)
+		go func() {
+			tick := time.NewTicker(time.Second / time.Duration(qpsLimit))
+			defer tick.Stop()
+			for range tick.C {
+				select {
+				case tokens <- struct{}{}:
+				default:
+				}
+			}
+		}()
+
+		servers[i] = &dnsServer{
+			addr:     addr,
+			resolver: r,
+			tokens:   tokens,
+		}
+	}
 
 	return &DNSChecker{
-		resolver: r,
-		tokens:   tokens,
-		cache:    make(map[string]bool),
+		servers: servers,
+		cache:   make(map[string]bool),
 	}
+}
+
+// getNextServer returns the next DNS server using round-robin
+func (dc *DNSChecker) getNextServer() *dnsServer {
+	idx := dc.nextIdx.Add(1) - 1
+	return dc.servers[idx%uint64(len(dc.servers))]
 }
 
 func (dc *DNSChecker) IsValid(ctx context.Context, domain string) bool {
@@ -367,8 +397,12 @@ func (dc *DNSChecker) IsValid(ctx context.Context, domain string) bool {
 
 	dc.queries.Add(1)
 
+	// Get next DNS server using round-robin
+	server := dc.getNextServer()
+
+	// Wait for rate limit token from the selected server
 	select {
-	case <-dc.tokens:
+	case <-server.tokens:
 	case <-ctx.Done():
 		return false
 	}
@@ -376,7 +410,7 @@ func (dc *DNSChecker) IsValid(ctx context.Context, domain string) bool {
 	ctxTO, cancel := context.WithTimeout(ctx, resolveTO)
 	defer cancel()
 
-	result := dc.performLookup(ctxTO, domain)
+	result := dc.performLookup(ctxTO, domain, server)
 
 	dc.cacheMu.Lock()
 	dc.cache[domain] = result
@@ -385,7 +419,7 @@ func (dc *DNSChecker) IsValid(ctx context.Context, domain string) bool {
 	return result
 }
 
-func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
+func (dc *DNSChecker) performLookup(ctx context.Context, domain string, server *dnsServer) bool {
 	// Try multiple lookup methods in parallel
 	type lookupResult struct {
 		success bool
@@ -396,19 +430,19 @@ func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
 
 	// A record lookup
 	go func() {
-		addrs, err := dc.resolver.LookupHost(ctx, domain)
+		addrs, err := server.resolver.LookupHost(ctx, domain)
 		results <- lookupResult{success: len(addrs) > 0, err: err}
 	}()
 
 	// AAAA record lookup
 	go func() {
-		ip6, err := dc.resolver.LookupIPAddr(ctx, domain)
+		ip6, err := server.resolver.LookupIPAddr(ctx, domain)
 		results <- lookupResult{success: len(ip6) > 0, err: err}
 	}()
 
 	// CNAME lookup
 	go func() {
-		cname, err := dc.resolver.LookupCNAME(ctx, domain)
+		cname, err := server.resolver.LookupCNAME(ctx, domain)
 		if err != nil {
 			results <- lookupResult{success: false, err: err}
 			return
@@ -423,7 +457,7 @@ func (dc *DNSChecker) performLookup(ctx context.Context, domain string) bool {
 		ctx2, cancel2 := context.WithTimeout(ctx, resolveTO)
 		defer cancel2()
 
-		addrs, err := dc.resolver.LookupHost(ctx2, cname)
+		addrs, err := server.resolver.LookupHost(ctx2, cname)
 		results <- lookupResult{success: len(addrs) > 0, err: err}
 	}()
 
@@ -827,7 +861,7 @@ func main() {
 		"# - " + srcJohnshall,
 		"# - " + srcHagezi,
 		"# allow.txt was applied to subtract domains; extra_block.txt was added.",
-		"# DNS validated via 119.29.29.29 at 20 QPS with connection pooling and batch processing",
+		"# DNS validated via load-balanced servers (119.29.29.29:53, 223.5.5.5:53, 101.101.101.101:53) at 20 QPS per server with connection pooling and batch processing",
 		"# Cache in cache/ok.txt; Monday UTC full refresh",
 		"# Build time (UTC): " + buildTime,
 		"",

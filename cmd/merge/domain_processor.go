@@ -50,7 +50,7 @@ func (dp *DomainProcessor) NormalizeDomain(raw string) (*Domain, bool) {
 		dp.mu.RUnlock()
 		return cached, cached.Valid
 	}
-		dp.mu.RUnlock()
+	dp.mu.RUnlock()
 	
 	// Normalize domain
 	normalized := strings.ToLower(raw)

@@ -82,7 +82,7 @@ func NewBuildOrchestrator(config *BuildConfig) *BuildOrchestrator {
 		httpClient:    NewHTTPClient(),
 		domainProc:    NewDomainProcessor(),
 		domainReader:  NewDomainListReader(NewDomainProcessor()),
-		dnsValidator:  NewBatchDNSValidator("119.29.29.53:53", config.DNSQPSLimit, config.Workers),
+		dnsValidator:  NewBatchDNSValidator("119.29.29.29:53", config.DNSQPSLimit, config.Workers),
 		configParser:  NewConfigurationParser(),
 		configBuilder: NewConfigurationBuilder(),
 		cache:         &BuildCache{cacheDir: config.CacheDir, data: make(map[string]interface{})},
@@ -163,7 +163,8 @@ func (bo *BuildOrchestrator) fetchSources(ctx context.Context) error {
 			bo.logger.Printf("Fetching %s from %s", t.name, t.url)
 			data, err := bo.httpClient.GetWithRetry(t.url)
 			if err != nil {
-				bo.recordError(fmt.Sprintf("failed to fetch %s: %v", t.name, err), err)
+				bo.recordError("failed to fetch "+t.name+": %w", err)
+				bo.logger.Printf("Error fetching %s: %v", t.name, err)
 				return
 			}
 			
@@ -183,7 +184,14 @@ func (bo *BuildOrchestrator) fetchSources(ctx context.Context) error {
 }
 
 func (bo *BuildOrchestrator) parseConfigurations(ctx context.Context) error {
-	sources := bo.cache.Get("sources").(map[string]string)
+	sourcesVal := bo.cache.Get("sources")
+	if sourcesVal == nil {
+		return fmt.Errorf("sources not found in cache")
+	}
+	sources, ok := sourcesVal.(map[string]string)
+	if !ok {
+		return fmt.Errorf("invalid sources type in cache")
+	}
 	
 	// Parse Johnshall configuration
 	johnshallConfig, err := bo.configParser.Parse(sources["johnshall"])
@@ -238,8 +246,23 @@ func (bo *BuildOrchestrator) processDomains(ctx context.Context) error {
 	}
 	
 	// Get source domains
-	johnshallSet := bo.cache.Get("johnshall_domains").(*DomainSet)
-	hageziSet := bo.cache.Get("hagezi_domains").(*DomainSet)
+	johnshallSetVal := bo.cache.Get("johnshall_domains")
+	if johnshallSetVal == nil {
+		return fmt.Errorf("johnshall_domains not found in cache")
+	}
+	johnshallSet, ok := johnshallSetVal.(*DomainSet)
+	if !ok {
+		return fmt.Errorf("invalid johnshall_domains type in cache")
+	}
+	
+	hageziSetVal := bo.cache.Get("hagezi_domains")
+	if hageziSetVal == nil {
+		return fmt.Errorf("hagezi_domains not found in cache")
+	}
+	hageziSet, ok := hageziSetVal.(*DomainSet)
+	if !ok {
+		return fmt.Errorf("invalid hagezi_domains type in cache")
+	}
 	
 	// Merge all domains
 	mergedSet := NewDomainSet()
@@ -267,7 +290,14 @@ func (bo *BuildOrchestrator) processDomains(ctx context.Context) error {
 }
 
 func (bo *BuildOrchestrator) validateDomains(ctx context.Context) error {
-	mergedSet := bo.cache.Get("merged_domains").(*DomainSet)
+	mergedSetVal := bo.cache.Get("merged_domains")
+	if mergedSetVal == nil {
+		return fmt.Errorf("merged_domains not found in cache")
+	}
+	mergedSet, ok := mergedSetVal.(*DomainSet)
+	if !ok {
+		return fmt.Errorf("invalid merged_domains type in cache")
+	}
 	domains := mergedSet.GetNormalized()
 	
 	// Check cache first
@@ -334,9 +364,32 @@ func (bo *BuildOrchestrator) validateDomains(ctx context.Context) error {
 }
 
 func (bo *BuildOrchestrator) generateOutput(ctx context.Context) error {
-	johnshallConfig := bo.cache.Get("johnshall_config").(*ParsedConfig)
-	nonDomainRules := bo.cache.Get("non_domain_rules").([]*ShadowrocketRule)
-	validatedDomains := bo.cache.Get("validated_domains").([]string)
+	johnshallConfigVal := bo.cache.Get("johnshall_config")
+	if johnshallConfigVal == nil {
+		return fmt.Errorf("johnshall_config not found in cache")
+	}
+	johnshallConfig, ok := johnshallConfigVal.(*ParsedConfig)
+	if !ok {
+		return fmt.Errorf("invalid johnshall_config type in cache")
+	}
+	
+	nonDomainRulesVal := bo.cache.Get("non_domain_rules")
+	if nonDomainRulesVal == nil {
+		return fmt.Errorf("non_domain_rules not found in cache")
+	}
+	nonDomainRules, ok := nonDomainRulesVal.([]*ShadowrocketRule)
+	if !ok {
+		return fmt.Errorf("invalid non_domain_rules type in cache")
+	}
+	
+	validatedDomainsVal := bo.cache.Get("validated_domains")
+	if validatedDomainsVal == nil {
+		return fmt.Errorf("validated_domains not found in cache")
+	}
+	validatedDomains, ok := validatedDomainsVal.([]string)
+	if !ok {
+		return fmt.Errorf("invalid validated_domains type in cache")
+	}
 	
 	// Sort domains for consistent output
 	sort.Strings(validatedDomains)
